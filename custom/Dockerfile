@@ -1,2 +1,6 @@
 FROM gliderlabs/logspout:master
-ENV SYSLOG_FORMAT rfc3164
+
+COPY entrypoint.sh /src/entrypoint.sh
+RUN chmod +x /src/entrypoint.sh
+
+ENTRYPOINT ["/src/entrypoint.sh"]
