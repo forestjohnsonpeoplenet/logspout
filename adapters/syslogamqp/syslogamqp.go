@@ -14,7 +14,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/gliderlabs/logspout/router"
+	"github.com/forestjohnsonpeoplenet/logspout/router"
 	"github.com/streadway/amqp"
 )
 

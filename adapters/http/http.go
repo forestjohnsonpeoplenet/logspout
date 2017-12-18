@@ -18,7 +18,7 @@ import (
   "sync"
   "time"
 
-  "github.com/gliderlabs/logspout/router"
+  "github.com/forestjohnsonpeoplenet/logspout/router"
 )
 
 func init() {
