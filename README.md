@@ -56,3 +56,10 @@ Our two custom adapters, `http` and `syslogamqp` use a forked version of the `ro
 		--volume=/var/run/docker.sock:/var/run/docker.sock \
 		foo-fork/logspout \
 		http://foo-host:80?filter.labels.exclude=io.rancher.stack.name:ipsec,io.rancher.stack.name:network-services
+
+### Custom Entrypoint script
+
+We have a custom entrypoint script which will try to override the hostname that logspout will send using information from:
+
+1. The AWS EC2 Metadata API if it is avaliable
+2. The Rancher Metadata API if it is avaliable
