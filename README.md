@@ -5,6 +5,14 @@ empty Dockerfile based on `gliderlabs/logspout:master` and include a new
 `modules.go` file as well as the `build.sh` script that resides in the root of
 this repo for the build context that will override the standard one.
 
+## WARNING! This means that you cannot modify the code locally and re-build. You have to push to github before building.
+
+Wait, what the heck?
+
+This is because your custom build is technically still building the gliderlabs/logspout package, not *your* package.
+
+Logspout uses the [glide package manager](https://github.com/Masterminds/glide) which will only use local go packages if they match the context of the current package being built. Otherwise it will download them from Github.  Since Glide executes in the context of `gliderlabs/logspout`, and our packages are under `forestjohnsonpeoplenet/logspout`, that means they will be downloaded from the internet each time. 
+
 ## Diagram of custom build process
 
 ![build diagram](build.png)
