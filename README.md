@@ -11,7 +11,7 @@ Wait, what the heck?
 
 This is because your custom build is technically still building the gliderlabs/logspout package, not *your* package.
 
-Logspout uses the [glide package manager](https://github.com/Masterminds/glide) which will only use local go packages if they match the context of the current package being built. Otherwise it will download them from Github.  Since Glide executes in the context of `gliderlabs/logspout`, and our packages are under `forestjohnsonpeoplenet/logspout`, that means they will be downloaded from the internet each time. 
+Logspout uses the [glide package manager](https://github.com/Masterminds/glide) which will only use local go packages if they match the context of the current package being built. Otherwise it will download them from Github.  Since Glide executes in the context of `gliderlabs/logspout`, and our packages are under `forestjohnsonpeoplenet/logspout`, that means they will be downloaded from the internet each time.
 
 ## Diagram of custom build process
 
@@ -50,7 +50,7 @@ Command: `https://foo.collection.us2.sumologic.com?http.gzip=true\&http.path=/re
 
 ### filter.labels.exclude
 
-Our two custom adapters, `http` and `syslogamqp` use a forked version of the `routes` package with new logic allowing blacklist-mode filtering on docker labels.
+Our two custom adapters, `http` and `syslogamqp` use a forked version of the `routes` package with new logic allowing blacklist-mode filtering on docker labels. We use this to easily silence noisy system containers in our Rancher deployments.
 
 	$ docker run \
 		--volume=/var/run/docker.sock:/var/run/docker.sock \
