@@ -38,7 +38,7 @@ Command: `syslogamqp+tls://foo-rabbit:5671?filter.labels=com.foo.logspout-amqp-r
 
 Works with SumoLogic.
 
-Command: `https://foo.collection.us2.sumologic.com?http.gzip=true\&http.path=/blahblahbahblahbase64\&http.crash=false\&http.labels=io.rancher.stack_service.name`
+Command: `https://foo.collection.us2.sumologic.com?http.gzip=true\&http.path=/receiver/v1/http/blahblahbahblahbase64\&http.crash=false\&http.labels=io.rancher.stack_service.name`
 
 ### filter.labels.exclude
 
@@ -47,4 +47,4 @@ Our two custom adapters, `http` and `syslogamqp` use a forked version of the `ro
 	$ docker run \
 		--volume=/var/run/docker.sock:/var/run/docker.sock \
 		foo-fork/logspout \
-		raw://192.168.10.10:5000?filter.labels.exclude=io.rancher.stack.name:ipsec,io.rancher.stack.name:network-services
+		http://foo-host:80?filter.labels.exclude=io.rancher.stack.name:ipsec,io.rancher.stack.name:network-services
