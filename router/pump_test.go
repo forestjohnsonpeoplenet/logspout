@@ -141,9 +141,11 @@ func TestPumpContainerRename(t *testing.T) {
 	}
 	client := newTestClient(&FakeRoundTripper{message: container, status: http.StatusOK})
 	p := &LogsPump{
-		client: &client,
-		pumps:  make(map[string]*containerPump),
-		routes: make(map[chan *update]struct{}),
+		client:         &client,
+		pumps:          make(map[string]*containerPump),
+		routes:         make(map[chan *update]struct{}),
+		reportMetric:   func(a MetricSample) {},
+		deadPumpAlerts: make(chan DeadPumpAlert),
 	}
 	config := &docker.Config{
 		Tty: false,
@@ -153,7 +155,7 @@ func TestPumpContainerRename(t *testing.T) {
 		Name:   "foo",
 		Config: config,
 	}
-	p.pumps["8dfafdbc3a40"] = newContainerPump(container, os.Stdout, os.Stderr)
+	p.pumps["8dfafdbc3a40"] = newContainerPump(p, "8dfafdbc3a40", func() {}, container, os.Stdout, os.Stderr)
 	if name := p.pumps["8dfafdbc3a40"].container.Name; name != "foo" {
 		t.Errorf("containerPump should have name: 'foo' got name: '%s'", name)
 	}
@@ -171,7 +173,16 @@ func TestPumpNewContainerPump(t *testing.T) {
 		ID:     "8dfafdbc3a40",
 		Config: config,
 	}
-	pump := newContainerPump(container, os.Stdout, os.Stderr)
+	client := newTestClient(&FakeRoundTripper{message: container, status: http.StatusOK})
+	p := &LogsPump{
+		client:         &client,
+		pumps:          make(map[string]*containerPump),
+		routes:         make(map[chan *update]struct{}),
+		reportMetric:   func(a MetricSample) {},
+		deadPumpAlerts: make(chan DeadPumpAlert),
+	}
+
+	pump := newContainerPump(p, "8dfafdbc3a40", func() {}, container, os.Stdout, os.Stderr)
 	if pump == nil {
 		t.Error("pump nil")
 		return
@@ -186,7 +197,15 @@ func TestPumpContainerPump(t *testing.T) {
 		ID:     "8dfafdbc3a40",
 		Config: config,
 	}
-	pump := newContainerPump(container, os.Stdout, os.Stderr)
+	client := newTestClient(&FakeRoundTripper{message: container, status: http.StatusOK})
+	p := &LogsPump{
+		client:         &client,
+		pumps:          make(map[string]*containerPump),
+		routes:         make(map[chan *update]struct{}),
+		reportMetric:   func(a MetricSample) {},
+		deadPumpAlerts: make(chan DeadPumpAlert),
+	}
+	pump := newContainerPump(p, "8dfafdbc3a40", func() {}, container, os.Stdout, os.Stderr)
 	logstream, route := make(chan *Message), &Route{}
 	go func() {
 		for msg := range logstream {

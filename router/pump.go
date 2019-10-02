@@ -10,15 +10,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsouza/go-dockerclient"
+	docker "github.com/fsouza/go-dockerclient"
 )
 
 var allowTTY bool
 
 func init() {
 	pump := &LogsPump{
-		pumps:  make(map[string]*containerPump),
-		routes: make(map[chan *update]struct{}),
+		pumps:          make(map[string]*containerPump),
+		routes:         make(map[chan *update]struct{}),
+		reportMetric:   func(sample MetricSample) { metricChannel <- sample },
+		deadPumpAlerts: deadLogStreamAlertChannel,
 	}
 	setAllowTTY()
 	LogRouters.Register(pump, "pump")
@@ -110,7 +112,7 @@ func ignoreContainerTTY(container *docker.Container) bool {
 }
 
 func getInactivityTimeoutFromEnv() time.Duration {
-	inactivityTimeout, err := time.ParseDuration(getopt("INACTIVITY_TIMEOUT", "0"))
+	inactivityTimeout, err := time.ParseDuration(getopt("INACTIVITY_TIMEOUT", "10s"))
 	assert(err, "Couldn't parse env var INACTIVITY_TIMEOUT. See https://golang.org/pkg/time/#ParseDuration for valid format.")
 	return inactivityTimeout
 }
@@ -122,10 +124,12 @@ type update struct {
 
 // LogsPump is responsible for "pumping" logs to their configured destinations
 type LogsPump struct {
-	mu     sync.Mutex
-	pumps  map[string]*containerPump
-	routes map[chan *update]struct{}
-	client *docker.Client
+	mu             sync.Mutex
+	pumps          map[string]*containerPump
+	routes         map[chan *update]struct{}
+	reportMetric   func(MetricSample)
+	deadPumpAlerts chan DeadPumpAlert
+	client         *docker.Client
 }
 
 // Name returns the name of the pump
@@ -163,21 +167,29 @@ func (p *LogsPump) Run() error {
 		return err
 	}
 	for _, listing := range containers {
-		p.pumpLogs(&docker.APIEvents{
-			ID:     normalID(listing.ID),
-			Status: "start",
-		}, false, inactivityTimeout)
+		p.pumpLogs(
+			&docker.APIEvents{
+				ID:     normalID(listing.ID),
+				Status: "start",
+			},
+			false,
+			inactivityTimeout,
+			time.Duration(0),
+		)
 	}
 	events := make(chan *docker.APIEvents)
 	err = p.client.AddEventListener(events)
 	if err != nil {
 		return err
 	}
+
+	go p.consumeDeadPumpAlerts()
+
 	for event := range events {
 		debug("pump.Run() event:", normalID(event.ID), event.Status)
 		switch event.Status {
 		case "start", "restart":
-			go p.pumpLogs(event, backlog(), inactivityTimeout)
+			go p.pumpLogs(event, backlog(), inactivityTimeout, time.Duration(0))
 		case "rename":
 			go p.rename(event)
 		case "die":
@@ -187,7 +199,31 @@ func (p *LogsPump) Run() error {
 	return errors.New("docker event stream closed")
 }
 
-func (p *LogsPump) pumpLogs(event *docker.APIEvents, backlog bool, inactivityTimeout time.Duration) {
+func (p *LogsPump) consumeDeadPumpAlerts() {
+	for deadPumpAlert := range p.deadPumpAlerts {
+
+		containerName := "container nil"
+		if p.pumps[deadPumpAlert.PumpId].container != nil {
+			containerName = p.pumps[deadPumpAlert.PumpId].container.Name
+		}
+		debug("consumeDeadPumpAlerts() pumpId:", deadPumpAlert.PumpId, ", containerName: ", containerName)
+
+		p.pumps[deadPumpAlert.PumpId].halt()
+
+		go p.pumpLogs(
+			&docker.APIEvents{
+				ID:     deadPumpAlert.PumpId,
+				Status: "start",
+			},
+			false,
+			getInactivityTimeoutFromEnv(),
+			deadPumpAlert.DeadFor,
+		)
+	}
+}
+
+func (p *LogsPump) pumpLogs(event *docker.APIEvents, backlog bool, inactivityTimeout, lookBackwards time.Duration) {
+
 	id := normalID(event.ID)
 	container, err := p.client.InspectContainer(id)
 	assert(err, "pump")
@@ -210,6 +246,7 @@ func (p *LogsPump) pumpLogs(event *docker.APIEvents, backlog bool, inactivityTim
 		sinceTime = time.Unix(0, 0)
 	} else {
 		sinceTime = time.Now()
+		sinceTime = sinceTime.Add(-lookBackwards)
 	}
 
 	p.mu.Lock()
@@ -227,10 +264,18 @@ func (p *LogsPump) pumpLogs(event *docker.APIEvents, backlog bool, inactivityTim
 	}
 	outrd, outwr := io.Pipe()
 	errrd, errwr := io.Pipe()
-	p.pumps[id] = newContainerPump(container, outrd, errrd)
+	haltPump := func() {
+		outwr.Close()
+		errwr.Close()
+		p.mu.Lock()
+		delete(p.pumps, id)
+		p.mu.Unlock()
+	}
+	p.pumps[id] = newContainerPump(p, id, haltPump, container, outrd, errrd)
 	p.mu.Unlock()
 	p.update(event)
 	go func() {
+
 		for {
 			debug("pump.pumpLogs():", id, "started, tail:", tail)
 			err := p.client.Logs(docker.LogsOptions{
@@ -254,6 +299,8 @@ func (p *LogsPump) pumpLogs(event *docker.APIEvents, backlog bool, inactivityTim
 			sinceTime = time.Now()
 			if err == docker.ErrInactivityTimeout {
 				sinceTime = sinceTime.Add(-inactivityTimeout)
+			} else {
+				time.Sleep(inactivityTimeout)
 			}
 
 			container, err := p.client.InspectContainer(id)
@@ -267,11 +314,7 @@ func (p *LogsPump) pumpLogs(event *docker.APIEvents, backlog bool, inactivityTim
 			}
 
 			debug("pump.pumpLogs():", id, "dead")
-			outwr.Close()
-			errwr.Close()
-			p.mu.Lock()
-			delete(p.pumps, id)
-			p.mu.Unlock()
+			haltPump()
 			return
 		}
 	}()
@@ -351,12 +394,14 @@ func (p *LogsPump) Route(route *Route, logstream chan *Message) {
 
 type containerPump struct {
 	sync.Mutex
+	halt       func()
 	container  *docker.Container
 	logstreams map[chan *Message]*Route
 }
 
-func newContainerPump(container *docker.Container, stdout, stderr io.Reader) *containerPump {
+func newContainerPump(logsPump *LogsPump, pumpId string, halt func(), container *docker.Container, stdout, stderr io.Reader) *containerPump {
 	cp := &containerPump{
+		halt:       halt,
 		container:  container,
 		logstreams: make(map[chan *Message]*Route),
 	}
@@ -370,6 +415,13 @@ func newContainerPump(container *docker.Container, stdout, stderr io.Reader) *co
 				}
 				return
 			}
+
+			logsPump.reportMetric(MetricSample{
+				LogCount:      1,
+				ContainerName: normalName(container.Name),
+				PumpId:        pumpId,
+			})
+
 			cp.send(&Message{
 				Data:      strings.TrimSuffix(line, "\n"),
 				Container: container,
